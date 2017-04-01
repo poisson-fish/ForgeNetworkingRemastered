@@ -498,6 +498,26 @@ namespace BeardedManStudios.Forge.Networking
 				return;
 			}
 
+			if (frame.GroupId == MessageGroupIds.BULK_RELIABLE_MESSAGES)
+			{
+				BMSByte tempRead = new BMSByte();
+
+				int count = frame.StreamData.GetBasicType<int>();
+
+				for (int i = 0; i < count; i++)
+				{
+					int length = frame.StreamData.GetBasicType<int>();
+
+					tempRead.Clone(frame.StreamData);
+					tempRead.SetSize(length);
+
+					ReadPacket(tempRead);
+					frame.StreamData.MoveStartIndex(length);
+				}
+
+				return;
+			}
+
 			// Send an event off that a packet has been read
 			OnMessageReceived(currentReadingPlayer, frame);
 		}

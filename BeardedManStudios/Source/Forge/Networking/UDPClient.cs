@@ -276,28 +276,7 @@ namespace BeardedManStudios.Forge.Networking
 					}
 					else
 					{
-						if (packet.Size < 17)
-							continue;
-
-						// Format the byte data into a UDPPacket struct
-						UDPPacket formattedPacket = TranscodePacket(Server, packet);
-
-						// Check to see if this is a confirmation packet, which is just
-						// a packet to say that the reliable packet has been read
-						if (formattedPacket.isConfirmation)
-						{
-							if (formattedPacket.groupId == MessageGroupIds.DISCONNECT)
-							{
-								CloseConnection();
-								return;
-							}
-
-							OnMessageConfirmed(server, formattedPacket);
-							continue;
-						}
-
-						// Add the packet to the manager so that it can be tracked and executed on complete
-						packetManager.AddPacket(formattedPacket, PacketSequenceComplete);
+						ProcessPacket(packet);
 					}
 				}
 			}
@@ -308,6 +287,34 @@ namespace BeardedManStudios.Forge.Networking
 			}
 		}
 
+		private bool ProcessPacket(BMSByte packet)
+		{
+			if (packet.Size < 17)
+				return false;
+
+			// Format the byte data into a UDPPacket struct
+			UDPPacket formattedPacket = TranscodePacket(Server, packet);
+
+			// Check to see if this is a confirmation packet, which is just
+			// a packet to say that the reliable packet has been read
+			if (formattedPacket.isConfirmation)
+			{
+				if (formattedPacket.groupId == MessageGroupIds.DISCONNECT)
+				{
+					CloseConnection();
+					return false;
+				}
+
+				OnMessageConfirmed(server, formattedPacket);
+				return false;
+			}
+
+			// Add the packet to the manager so that it can be tracked and executed on complete
+			packetManager.AddPacket(formattedPacket, PacketSequenceComplete);
+
+			return true;
+		}
+
 		private void PacketSequenceComplete(BMSByte data, int groupId, byte receivers)
 		{
 			// Pull the frame from the sent message
@@ -316,6 +323,26 @@ namespace BeardedManStudios.Forge.Networking
 			if (frame is ConnectionClose)
 			{
 				CloseConnection();
+				return;
+			}
+
+			if (frame.GroupId == MessageGroupIds.BULK_RELIABLE_MESSAGES)
+			{
+				BMSByte tempRead = new BMSByte();
+
+				int count = frame.StreamData.GetBasicType<int>();
+
+				for (int i = 0; i < count; i++)
+				{
+					int length = frame.StreamData.GetBasicType<int>();
+
+					tempRead.Clone(frame.StreamData);
+					tempRead.SetSize(length);
+
+					ProcessPacket(tempRead);
+					frame.StreamData.MoveStartIndex(length);
+				}
+
 				return;
 			}
 

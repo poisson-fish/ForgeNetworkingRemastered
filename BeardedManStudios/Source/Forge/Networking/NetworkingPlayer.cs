@@ -17,9 +17,12 @@
 |                                                              |
 \------------------------------+------------------------------*/
 
+using BeardedManStudios.Forge.Networking.Frame;
 using BeardedManStudios.Threading;
+using System;
 using System.Collections.Generic;
 using System.Net;
+using System.Linq;
 
 #if WINDOWS_UWP
 using Windows.Networking.Sockets;
@@ -301,10 +304,11 @@ namespace BeardedManStudios.Forge.Networking
 
 			if (!composerReady && Networker.IsBound && !NetWorker.EndingSession)
 			{
+				BMSByte bufferedData = new BMSByte();
 				// Run this on a separate thread so that it doesn't interfere with the reading thread
 				Task.Queue(() =>
 				{
-					int waitTime = 10;
+					int waitTime = 10, pendingPacketCount = 0;
 					while (Networker.IsBound && !Disconnected)
 					{
 						if (nextComposerReady)
@@ -325,17 +329,64 @@ namespace BeardedManStudios.Forge.Networking
 						{
 							lock (currentComposer.PendingPackets)
 							{
-								if (currentComposer.PendingPackets.Count > 0)
-								{
-									if (Networker.LatencySimulation > 0)
-										Task.Sleep(Networker.LatencySimulation);
-
-									currentComposer.ResendPackets();
-								}
+								pendingPacketCount = currentComposer.PendingPackets.Count;
 							}
 
-							// TODO:  Wait the latency for this
-							Task.Sleep(10);
+							if (pendingPacketCount > 0)
+							{
+								if (Networker.LatencySimulation > 0)
+									Task.Sleep(Networker.LatencySimulation);
+
+								if (currentComposer.Frame.GroupId == MessageGroupIds.BULK_RELIABLE_MESSAGES || !Accepted)
+								{
+									currentComposer.ResendPackets();
+									Task.Sleep(10);
+									continue;
+								}
+
+								bufferedData.Clear();
+
+								ObjectMapper.Instance.MapBytes(bufferedData, reliableComposers.Count);
+
+								int startIndex;
+								foreach (UDPPacketComposer composer in reliableComposers)
+								{
+									startIndex = bufferedData.Size;
+									composer.OptimizedResendPacket(bufferedData);
+									bufferedData.InsertRange(startIndex, BitConverter.GetBytes(bufferedData.Size - startIndex));
+								}
+
+								CleanupComposer();
+								lock (reliableComposers)
+								{
+									reliableComposers.Clear();
+								}
+
+								Binary frame = new Binary(
+									Networker.Time.Timestep,
+									Networker is TCPClientBase,
+									bufferedData,
+									Receivers.Target,
+									MessageGroupIds.BULK_RELIABLE_MESSAGES,
+									Networker is BaseTCP);
+
+								if (Networker is IServer)
+								{
+									if (Networker is TCPServer)
+										((TCPServer)Networker).Send(TcpClientHandle, frame);
+									else if (Networker is UDPServer)
+										((UDPServer)Networker).Send(this, frame, true);
+								}
+								else
+								{
+									if (Networker is TCPClientBase)
+										((TCPClientBase)Networker).Send(frame);
+									else if (Networker is UDPClient)
+										((UDPClient)Networker).Send(frame, true);
+								}
+
+								break;
+							}
 						} while (!currentComposer.Player.Disconnected && currentComposer.PendingPackets.Count > 0 && Networker.IsBound && !NetWorker.EndingSession);
 						currentPingWait = 0;
 					}
@@ -350,12 +401,15 @@ namespace BeardedManStudios.Forge.Networking
 		/// </summary>
 		public void CleanupComposer()
 		{
+			nextComposerReady = true;
+
 			lock (reliableComposers)
 			{
+				if (reliableComposers.Count == 0)
+					return;
+
 				// Reliable packets are sent in order so remove the first one
 				reliableComposers.RemoveAt(0);
-
-				nextComposerReady = true;
 
 				// Check to see if there are any more reliable packets queued up
 				NextComposerInQueue();

@@ -198,7 +198,7 @@ namespace BeardedManStudios.Forge.Networking
 					// Add the receivers to the end header byte
 					trailer[trailer.Length - 1] |= (byte)(((int)Frame.Receivers) << 4);
 				}
-				else	// We need to copy the unique id into this message
+				else    // We need to copy the unique id into this message
 					Buffer.BlockCopy(BitConverter.GetBytes(Frame.UniqueId), 0, packet, length, sizeof(ulong));
 
 				// Set the order id for this packet in the trailer
@@ -223,6 +223,15 @@ namespace BeardedManStudios.Forge.Networking
 				kv.Value.DoingRetry();
 				Send(kv.Value.rawBytes);
 				ClientWorker.BandwidthOut += (ulong)kv.Value.rawBytes.Length;
+			}
+		}
+
+		public void OptimizedResendPacket(BMSByte block)
+		{
+			foreach (KeyValuePair<int, UDPPacket> kv in PendingPackets)
+			{
+				kv.Value.DoingRetry();
+				block.Append(kv.Value.rawBytes);
 			}
 		}
 
